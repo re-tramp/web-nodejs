@@ -9,7 +9,7 @@ const error = (...args) => console.error(...args);
 const uuid = (
     process.env.UUID || "f65c45c4-08c0-49f4-a2bf-aed46e0c008a"
 ).replace(/-/g, "");
-const port = process.env.PORT || 8080;
+const port = process.env.PORT || 443;
 
 // Create WebSocket server
 const wss = new WebSocket.Server({ port }, () =>
