@@ -1,77 +1,156 @@
-const net = require("net");
-const WebSocket = require("ws");
+const express = require('express');
 
-// Logging functions
-const log = (...args) => console.log(...args);
-const error = (...args) => console.error(...args);
+const { connect } = require('net');
 
-// Configuration
-const uuid = (
-    process.env.UUID || "f65c45c4-08c0-49f4-a2bf-aed46e0c008a"
-).replace(/-/g, "");
-const port = process.env.PORT || 443;
+const { Server, createWebSocketStream } = require('ws');
 
-// Create WebSocket server
-const wss = new WebSocket.Server({ port }, () =>
-    log("Listening on port:", port),
+const { bin, install } = require('cloudflared');
+
+const { spawn } = require('node:child_process');
+
+const fs = require('node:fs');
+
+const server = 'bexnxx.nyc.mn'
+
+const app = express();
+
+
+const uuidv4 = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c =>
+
+    ((Math.random() * 16) | 0).toString(16)
+
 );
 
-wss.on("connection", (ws) => {
-    log("Client connected");
 
-    ws.once("message", (msg) => {
-        const [VERSION] = msg;
-        const id = msg.slice(1, 17);
+function run(config) {
 
-        // Validate UUID
-        if (!id.every((v, i) => v === parseInt(uuid.substr(i * 2, 2), 16)))
+    if (!config.port) {
+
+        console.error('port?')
+
+        return
+
+    }
+
+    app.get('*', (req, res) => {
+
+        //res.setHeader('Content-Type', 'text/plain');
+        res.redirect(`https://newsnow.busiyi.world/`);
+
+        //     res.send(`TLS: vless://${config.uuid ? config.uuid : uuidv4()}@${server}:443?encryption=none&security=tls&sni=${server}&fp=randomized&type=ws&host=${server}&path=${encodeURIComponent('/' + btoa(`${req.protocol}://${req.headers.host}${config.path ? config.path : "/"}`))}#vless+ws+tls
+
+
+        // NONTLS: vless://${config.uuid ? config.uuid : uuidv4()}@${server}:80?path=${encodeURIComponent('/' + btoa(`${req.protocol}://${req.headers.host}${config.path ? config.path : "/"}`))}&security=none&encryption=none&host=${server}&fp=randomized&type=ws&sni=${server}#vless+ws+nontls`);
+
+    });
+
+
+    const httpServer = app.listen(config.port, () => {
+
+        console.log(`Server running on http://localhost:${config.port}`);
+
+        if (config.token) {
+            console.log(`starting tuunel...`);
+
+            if (!fs.existsSync(bin)) {
+                // install cloudflared binary
+                install(bin).then(result => {
+                    console.log('installed tuunel');
+                    spawn(bin, ["tunnel", "run", "--token", config.token], { stdio: "inherit" });
+                }).catch(error => {
+                    console.log('tuunel installed failed', error);
+                });
+
+            } else {
+                spawn(bin, ["tunnel", "run", "--token", config.token], { stdio: "inherit" });
+            }
+            
+
+        }
+    });
+
+
+
+
+    const wss = new Server({ noServer: true, path: config.path || null });
+
+
+    wss.on('connection', (ws) => {
+
+        ws.once('message', (msg) => {
+
+            const [version] = msg;
+
+            const id = msg.subarray(1, 17).toString('hex');
+
+            if (config.uuid && (id !== config.uuid.replace(/-/g, ''))) return;
+
+            let offset = msg.readUInt8(17) + 19;
+
+            const targetPort = msg.readUInt16BE(offset);
+
+            offset += 2;
+
+            const addressType = msg.readUInt8(offset++);
+
+            const getHost = {
+
+                1: () => Array.from(msg.subarray(offset, offset += 4)).join('.'),
+
+                2: () => new TextDecoder().decode(msg.subarray(offset + 1, offset += 1 + msg[offset])),
+
+                3: () => Array.from(msg.subarray(offset, offset += 16))
+                    .map((b, i, arr) => (i % 2 ? arr.slice(i - 1, i + 1) : [])
+                        .map(x => x.readUInt16BE(0).toString(16)).join(':')).filter(Boolean).join(':'),
+
+            };
+
+            const targetHost = getHost[addressType] ? getHost[addressType]() : '';
+
+            ws.send(Uint8Array.of(version, 0));
+
+            const duplex = createWebSocketStream(ws);
+
+            connect({ host: targetHost, port: targetPort }, function () {
+
+                this.write(msg.subarray(offset));
+
+                duplex.pipe(this).pipe(duplex);
+
+            }).on('error', () => { });
+
+        });
+
+    });
+
+    httpServer.on('upgrade', (request, socket, head) => {
+
+        if (request.headers.upgrade.toLowerCase() !== 'websocket') {
+
+            socket.end('HTTP/1.1 400 Bad Request');
+
             return;
 
-        let i = msg.slice(17, 18).readUInt8() + 19;
-        const targetPort = msg.slice(i, (i += 2)).readUInt16BE(0);
-        const ATYP = msg.slice(i, (i += 1)).readUInt8();
-
-        // Determine host based on address type
-        let host;
-        if (ATYP === 1) {
-            // IPv4
-            host = msg.slice(i, (i += 4)).join(".");
-        } else if (ATYP === 2) {
-            // Domain
-            const len = msg.slice(i, i + 1).readUInt8();
-            host = new TextDecoder().decode(msg.slice(i + 1, (i += 1 + len)));
-        } else if (ATYP === 3) {
-            // IPv6
-            host = msg
-                .slice(i, (i += 16))
-                .reduce(
-                    (s, b, j, a) =>
-                        j % 2 ? s.concat(a.slice(j - 1, j + 1)) : s,
-                    [],
-                )
-                .map((b) => b.readUInt16BE(0).toString(16))
-                .join(":");
         }
 
-        log("Connecting to:", host, targetPort);
+        wss.handleUpgrade(request, socket, head, (ws) => {
 
-        // Send acknowledgment to client
-        ws.send(new Uint8Array([VERSION, 0]));
+            wss.emit('connection', ws, request);
 
-        // Create a duplex stream
-        const duplex = WebSocket.createWebSocketStream(ws);
+        });
 
-        // Connect to target server
-        net.connect({ host, port: targetPort }, function () {
-            this.write(msg.slice(i)); // Send remaining message data
-            duplex
-                .on("error", error.bind(null, "Duplex error:"))
-                .pipe(this)
-                .on("error", error.bind(null, "Socket error:"))
-                .pipe(duplex);
-        }).on(
-            "error",
-            error.bind(null, "Connection error:", { host, port: targetPort }),
-        );
-    }).on("error", error.bind(null, "WebSocket error:"));
-});
+    });
+
+}
+
+
+process.on('uncaughtException', error => { console.log(error) });
+
+process.on('unhandledRejection', error => { console.log(error) });
+
+
+run({
+    port: 1274,
+    uuid: 'f65c45c4-08c0-49f4-a2bf-aed46e0c008a',
+    token: '',
+})
