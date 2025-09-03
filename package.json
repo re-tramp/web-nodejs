@@ -1,17 +1,38 @@
 {
-  "name": "node",
-  "version": "1.0.0",
-  "description": "",
+
+  "name": "vls-ws",
+
+  "version": "1.0.2",
+
+  "description": "web",
+
   "main": "index.js",
-  "dependencies": {
-    "http-proxy": "latest",
-    "ws": "^8.13.0"
-  },
-  "devDependencies": {},
+
   "scripts": {
-    "start": "npm index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+
+    "start": "node index.js"
+
   },
-  "author": "",
-  "license": "ISC"
+
+  "keywords": [
+
+    "websocket",
+
+    "nodejs"
+  ],
+
+  "author": "bexnxx",
+
+  "license": "ISC",
+
+  "dependencies": {
+
+    "ws": "latest",
+
+    "express": "^4.21.2",
+	
+	  "cloudflared": "latest"
+
+  }
+
 }
