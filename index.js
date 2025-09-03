@@ -1,156 +1,118 @@
-const express = require('express');
+// src/index.js
 
-const { connect } = require('net');
+export default {
+    async fetch(request, env, ctx) {
+        // 从环境变量中获取 UUID，如果未设置，则使用代码中的默认值
+        const userID = env.UUID || 'f65c45c4-08c0-49f4-a2bf-aed46e0c008a';
+        
+        const url = new URL(request.url);
 
-const { Server, createWebSocketStream } = require('ws');
-
-const { bin, install } = require('cloudflared');
-
-const { spawn } = require('node:child_process');
-
-const fs = require('node:fs');
-
-const server = 'bexnxx.nyc.mn'
-
-const app = express();
-
-
-const uuidv4 = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c =>
-
-    ((Math.random() * 16) | 0).toString(16)
-
-);
-
-
-function run(config) {
-
-    if (!config.port) {
-
-        console.error('port?')
-
-        return
-
-    }
-
-    app.get('*', (req, res) => {
-
-        //res.setHeader('Content-Type', 'text/plain');
-        res.redirect(`https://newsnow.busiyi.world/`);
-
-        //     res.send(`TLS: vless://${config.uuid ? config.uuid : uuidv4()}@${server}:443?encryption=none&security=tls&sni=${server}&fp=randomized&type=ws&host=${server}&path=${encodeURIComponent('/' + btoa(`${req.protocol}://${req.headers.host}${config.path ? config.path : "/"}`))}#vless+ws+tls
-
-
-        // NONTLS: vless://${config.uuid ? config.uuid : uuidv4()}@${server}:80?path=${encodeURIComponent('/' + btoa(`${req.protocol}://${req.headers.host}${config.path ? config.path : "/"}`))}&security=none&encryption=none&host=${server}&fp=randomized&type=ws&sni=${server}#vless+ws+nontls`);
-
-    });
-
-
-    const httpServer = app.listen(config.port, () => {
-
-        console.log(`Server running on http://localhost:${config.port}`);
-
-        if (config.token) {
-            console.log(`starting tuunel...`);
-
-            if (!fs.existsSync(bin)) {
-                // install cloudflared binary
-                install(bin).then(result => {
-                    console.log('installed tuunel');
-                    spawn(bin, ["tunnel", "run", "--token", config.token], { stdio: "inherit" });
-                }).catch(error => {
-                    console.log('tuunel installed failed', error);
-                });
-
-            } else {
-                spawn(bin, ["tunnel", "run", "--token", config.token], { stdio: "inherit" });
-            }
-            
-
-        }
-    });
-
-
-
-
-    const wss = new Server({ noServer: true, path: config.path || null });
-
-
-    wss.on('connection', (ws) => {
-
-        ws.once('message', (msg) => {
-
-            const [version] = msg;
-
-            const id = msg.subarray(1, 17).toString('hex');
-
-            if (config.uuid && (id !== config.uuid.replace(/-/g, ''))) return;
-
-            let offset = msg.readUInt8(17) + 19;
-
-            const targetPort = msg.readUInt16BE(offset);
-
-            offset += 2;
-
-            const addressType = msg.readUInt8(offset++);
-
-            const getHost = {
-
-                1: () => Array.from(msg.subarray(offset, offset += 4)).join('.'),
-
-                2: () => new TextDecoder().decode(msg.subarray(offset + 1, offset += 1 + msg[offset])),
-
-                3: () => Array.from(msg.subarray(offset, offset += 16))
-                    .map((b, i, arr) => (i % 2 ? arr.slice(i - 1, i + 1) : [])
-                        .map(x => x.readUInt16BE(0).toString(16)).join(':')).filter(Boolean).join(':'),
-
-            };
-
-            const targetHost = getHost[addressType] ? getHost[addressType]() : '';
-
-            ws.send(Uint8Array.of(version, 0));
-
-            const duplex = createWebSocketStream(ws);
-
-            connect({ host: targetHost, port: targetPort }, function () {
-
-                this.write(msg.subarray(offset));
-
-                duplex.pipe(this).pipe(duplex);
-
-            }).on('error', () => { });
-
-        });
-
-    });
-
-    httpServer.on('upgrade', (request, socket, head) => {
-
-        if (request.headers.upgrade.toLowerCase() !== 'websocket') {
-
-            socket.end('HTTP/1.1 400 Bad Request');
-
-            return;
-
+        // 处理 WebSocket 升级请求
+        if (request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
+            return handleWebSocket(request, userID);
         }
 
-        wss.handleUpgrade(request, socket, head, (ws) => {
+        // 处理所有其他的 HTTP GET 请求，进行重定向
+        if (request.method === 'GET') {
+            // 你可以自定义重定向的目标地址
+            return Response.redirect('https://news.google.com', 302);
+        }
 
-            wss.emit('connection', ws, request);
+        // 对于非 GET 请求或不符合条件的请求，返回 404
+        return new Response('Not found', { status: 404 });
+    },
+};
 
-        });
+/**
+ * 处理 WebSocket 请求
+ * @param {Request} request
+ * @param {string} userID 用户的 UUID
+ */
+async function handleWebSocket(request, userID) {
+    const { readable, writable } = new WebSocketStream(new WebSocketPair()[0]);
+    const earlyData = request.headers.get('sec-websocket-protocol') || '';
 
+    handleVLESSConnection({
+        readable,
+        writable,
+        earlyData,
+        userID,
+    }).catch(err => {
+        console.error('VLESS connection error:', err);
     });
 
+    return new Response(null, {
+        status: 101,
+        webSocket: new WebSocketPair()[1],
+    });
 }
 
+/**
+ * 处理 VLESS 协议的连接
+ * @param {*} vlessConfig
+ */
+async function handleVLESSConnection({ readable, writable, earlyData, userID }) {
+    const vlessReader = readable.getReader();
+    const vlessWriter = writable.getWriter();
+    
+    let remoteSocket;
 
-process.on('uncaughtException', error => { console.log(error) });
+    vlessReader.read().then(async ({ value, done }) => {
+        if (done) return;
+        
+        const vlessBuffer = value;
+        const reqId = vlessBuffer.subarray(1, 17).toString('hex');
+        
+        // 验证 UUID
+        if (reqId !== userID.replace(/-/g, '')) {
+            console.log(`Invalid UUID: ${reqId}`);
+            return;
+        }
 
-process.on('unhandledRejection', error => { console.log(error) });
+        let offset = vlessBuffer.readUInt8(17) + 19;
+        const targetPort = vlessBuffer.readUInt16BE(offset);
+        offset += 2;
+        const addressType = vlessBuffer.readUInt8(offset++);
 
+        let targetHost = '';
+        switch (addressType) {
+            case 1: // IPv4
+                targetHost = Array.from(vlessBuffer.subarray(offset, offset += 4)).join('.');
+                break;
+            case 2: // Domain
+                const domainLength = vlessBuffer[offset];
+                offset += 1;
+                targetHost = new TextDecoder().decode(vlessBuffer.subarray(offset, offset += domainLength));
+                break;
+            case 3: // IPv6
+                targetHost = Array.from(vlessBuffer.subarray(offset, offset += 16))
+                    .map((b, i, arr) => (i % 2 === 0 ? arr.slice(i, i + 2).readUInt16BE(0).toString(16) : null))
+                    .filter(Boolean).join(':');
+                break;
+            default:
+                console.log(`Invalid address type: ${addressType}`);
+                return;
+        }
+        
+        // 确认版本号并发送响应
+        await vlessWriter.write(new Uint8Array([vlessBuffer[0], 0]));
 
-run({
-    port: 1274,
-    uuid: 'f65c45c4-08c0-49f4-a2bf-aed46e0c008a',
-    token: '',
-})
+        // 与目标地址建立 TCP 连接
+        remoteSocket = await connect({ hostname: targetHost, port: targetPort });
+        
+        // 将剩余的数据写入远程 socket
+        const restData = vlessBuffer.subarray(offset);
+        if (restData.byteLength > 0) {
+            await remoteSocket.writable.getWriter().write(restData);
+        }
+
+        // 双向管道传输数据
+        await Promise.all([
+            remoteSocket.readable.pipeTo(writable, { preventClose: true }),
+            readable.pipeTo(remoteSocket.writable, { preventClose: true }),
+        ]);
+
+    }).catch(err => {
+        console.error('VLESS read error:', err);
+    });
+}
